@@ -1,8 +1,10 @@
 # 辨是非 · 云开发数据库（CloudBase Document DB）集合与索引
 
 后端使用 **CloudBase 文档数据库**（NoSQL，免连接串），通过 `@cloudbase/node-sdk` 的
-`app.database()` 访问。集合**即用即建**，无需建表 SQL；下面列出使用的集合与推荐索引，
-索引请在 **云开发控制台 → 数据库 → 集合 → 索引管理** 中创建（提升查询/排序性能、避免全表扫描）。
+`app.database()` 访问。集合**不会**在首次写入时自动创建，必须先在
+**云开发控制台 → 数据管理（数据库）→ 集合 → 新建集合** 手动创建下方全部集合，
+否则接口报 `[ResourceNotFound] Db or Table not exist`。
+索引在 **集合 → 索引管理** 中创建（提升查询/排序性能、避免全表扫描）。
 
 > created_at / updated_at / expires_at 字段均为 BIGINT（毫秒时间戳，由服务端写入），非日期类型。
 > reasons / actions / sources / risk_predicates 为数组/对象，直接存文档库，读取即解析。

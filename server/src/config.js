@@ -17,7 +17,7 @@ module.exports = {
   AI: {
     BASE_URL:
       process.env.AI_BASE_URL ||
-      'https://dev-d4g97a4h5772bec4a.api.tcloudbasegateway.com/v1/ai/cloudbase',
+      'https://cloud1-d2gpgyh80aef3842b.api.tcloudbasegateway.com/v1/ai/cloudbase',
     KEY: process.env.AI_KEY || '',
     MODEL: process.env.AI_MODEL || 'hy3',
   },
