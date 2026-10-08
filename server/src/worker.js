@@ -14,34 +14,28 @@ const { AI } = require('./config');
 // 既能恢复卡死的 job，又避免并发轮询重复认领同一条（见 processJobById）。
 const STALE_MS = 60000;
 
-// 认领一个待处理任务（多实例部署时靠条件更新抢占，避免重复处理）。
-// 认领条件：pending，或 running 但已超时（updated_at 早于 now-STALE_MS）。
-// 文档库无 SELECT FOR UPDATE，故先取候选，再用「只在该状态时才置 running」的条件更新抢占；
-// 抢占成功（updated=1）才处理，否则视为被其他实例认领，返回 null。
-async function claimNextJob() {
+// 按条件查一个候选 job，并用「只在该状态时才置 running」的条件更新抢占
+// （多实例部署防重复处理；抢占成功 updated=1 才算认领成功）。
+// 注意：不要用 _.or 组合查询——实测服务端会抛
+// "Cannot read properties of undefined (reading 'updatedAt')"，改为拆成多次简单查询。
+async function claimWhere(cond) {
   const now = Date.now();
-  const staleTs = now - STALE_MS;
-  const { data } = await C.jobs
-    .where(
-      _.or([
-        { status: 'pending' },
-        { status: 'running', updated_at: _.lt(staleTs) },
-      ])
-    )
-    .orderBy('created_at', 'asc')
-    .limit(1)
-    .get();
+  const { data } = await C.jobs.where(cond).orderBy('created_at', 'asc').limit(1).get();
   if (!data.length) return null;
   const job = data[0];
-  const upd1 = await C.jobs
-    .where({ _id: job._id, status: 'pending' })
+  const upd = await C.jobs
+    .where({ _id: job._id, status: cond.status })
     .update({ status: 'running', stage: 1, updated_at: now });
-  if (upd1.stats.updated !== 1) {
-    const upd2 = await C.jobs
-      .where({ _id: job._id, status: 'running', updated_at: _.lt(staleTs) })
-      .update({ status: 'running', stage: 1, updated_at: now });
-    if (upd2.stats.updated !== 1) return null;
-  }
+  const updated = upd && upd.stats && upd.stats.updated;
+  if (updated !== 1) return null;
+  return job;
+}
+
+// 认领一个待处理任务：先抢 pending，再抢超时残留的 running（updated_at 早于 now-STALE_MS）。
+async function claimNextJob() {
+  const staleTs = Date.now() - STALE_MS;
+  let job = await claimWhere({ status: 'pending' });
+  if (!job) job = await claimWhere({ status: 'running', updated_at: _.lt(staleTs) });
   return job;
 }
 
@@ -134,13 +128,21 @@ async function processJobById(id) {
     const { data } = await C.jobs.doc(id).get();
     const j = data[0];
     if (!j) return null;
-    const upd = await C.jobs
-      .where({ _id: id, status: _.or([{ status: 'pending' }, { status: 'running', updated_at: _.lt(staleTs) }]) })
+    // 不用 _.or 组合条件（服务端不兼容），改为先试 pending、再试超时残留 running
+    let upd = await C.jobs
+      .where({ _id: id, status: 'pending' })
       .update({ status: 'running', stage: 1, updated_at: now });
-    if (upd.stats.updated !== 1) return null; // 被其他实例认领 / 非待处理
+    let claimed = upd && upd.stats && upd.stats.updated === 1;
+    if (!claimed) {
+      upd = await C.jobs
+        .where({ _id: id, status: 'running', updated_at: _.lt(staleTs) })
+        .update({ status: 'running', stage: 1, updated_at: now });
+      claimed = upd && upd.stats && upd.stats.updated === 1;
+    }
+    if (!claimed) return null; // 被其他实例认领 / 非待处理
     job = j;
   } catch (e) {
-    console.error('[worker] processJobById claim err', e && e.message);
+    console.error('[worker] processJobById claim err', (e && e.stack) || e);
     return null;
   }
   if (!job) return null;
@@ -159,7 +161,7 @@ async function scanOnce() {
   try {
     job = await claimNextJob();
   } catch (e) {
-    console.error('[worker] claim err', e.message);
+    console.error('[worker] claim err', (e && e.stack) || e);
     return 0;
   }
   if (!job) return 0;
