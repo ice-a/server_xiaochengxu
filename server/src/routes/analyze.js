@@ -35,6 +35,7 @@ async function checkQuota(uid) {
 // POST /api/analyze  { text, uid }
 // 返回：{ ok:true, cached:true, verdictId, verdict } 或 { ok:true, cached:false, jobId }
 router.post('/', async (req, res) => {
+  try {
   const uid = (req.body.uid || 'anonymous').toString();
   const text = (req.body.text || '').trim();
   if (text.length < 5) {
@@ -78,6 +79,12 @@ router.post('/', async (req, res) => {
 
   // worker 定时器会在数秒内异步处理；前端轮询 getVerdict({jobId}) 取结论
   return res.json({ ok: true, cached: false, jobId });
+  } catch (e) {
+    console.error('[analyze] db error', e && e.message);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, code: 500, msg: '分析失败：' + (e && e.message) });
+    }
+  }
 });
 
 module.exports = router;
