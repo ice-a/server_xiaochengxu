@@ -14,12 +14,10 @@ module.exports = {
   // ===== 云托管调用方式 =====
   // 走 CloudBase 云托管后端（server/ 部署到云托管）：AI 的 baseurl/apikey/model 写在云托管
   // 「服务配置 → 环境变量」(AI_BASE_URL / AI_KEY / AI_MODEL)，不进前端代码，也不会下发到客户端。
-  // 方式一（推荐）：wx.cloud.callContainer，免「request 域名白名单」，需 wx.cloud.init（见 app.js）。
+  // 调用方式：wx.cloud.callContainer（免「request 域名白名单」，需 wx.cloud.init，见 app.js）。
   //   云托管若在该环境内有多个服务，可在 utils/cloud.js 的 callContainer 配置里加 service 名。
-  // 方式二：wx.request 直连，需把 API_BASE 加入小程序「request 合法域名」。
+  //   （已移除原 wx.request 直连方式，不再需要 API_BASE 公网域名。）
   USE_CLOUD_CONTAINER: true,
-  // 方式二用的后端域名（云托管服务分配的公网域名，或原 Vercel 域名）。
-  API_BASE: 'https://wx.020417.xyz',
 
   // 业务相关开关（与云托管侧 ENV 保持一致即可，前端仅用于 UI 提示）
   ENABLE_LINK_RESOLVE: true,
