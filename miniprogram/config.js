@@ -26,7 +26,8 @@ module.exports = {
 
   // 虚拟支付开关：true 时打赏走 wx.requestVirtualPayment（需后台开通虚拟支付能力并配置密钥）；
   // false 时为演示模式，打赏直接记录到后端 tips 表，不产生真实扣款。
-  USE_VIRTUAL_PAY: false,
+  // 开启后须在云托管配置 VIRTUAL_PAY_OFFERID / VIRTUAL_PAY_KEY（见 server/.env.example），否则打赏会报「未配置」。
+  USE_VIRTUAL_PAY: true,
 
   // 每日免费次数（仅用于 UI 文案，真实限制由云函数侧 abuse 集合控制）
   FREE_QUOTA: 10,
