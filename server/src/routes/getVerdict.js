@@ -2,16 +2,16 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../db');
+const { C } = require('../db');
 const { publicVerdict } = require('../format');
 const { processJobById } = require('../worker');
 
 // 按 verdictId 返回公开结论
 async function getVerdictById(id) {
-  const { rows } = await pool.query('SELECT * FROM verdicts WHERE id=$1 LIMIT 1', [Number(id)]);
-  const v = rows[0];
+  const { data } = await C.verdicts.doc(id).get();
+  const v = data[0];
   if (!v) return null;
-  return { verdictId: String(v.id), verdict: publicVerdict(v) };
+  return { verdictId: String(v._id), verdict: publicVerdict(v) };
 }
 
 // POST /api/getVerdict  { jobId } 或 { verdictId }
@@ -19,7 +19,7 @@ async function getVerdictById(id) {
 router.post('/', async (req, res) => {
   // 轮询模式：按 jobId 返回任务进度 / 结论
   if (req.body.jobId) {
-    const { rows } = await pool.query('SELECT * FROM jobs WHERE id=$1 LIMIT 1', [Number(req.body.jobId)]);
+    const { data: rows } = await C.jobs.doc(req.body.jobId).get();
     const job = rows[0];
     if (!job) return res.json({ ok: false, code: 404, msg: '任务不存在' });
 

@@ -1,45 +1,42 @@
 'use strict';
 
-const { Pool } = require('pg');
+// 云开发数据库（CloudBase Document DB，NoSQL）——免连接串：
+//   - 云托管（同环境）内通常无需密钥，tcb.init({ env }) 即用；
+//   - 跨环境 / 本地调试，可填 secretId + secretKey（读环境变量）。
+// 文档库集合即用即建，无需建表 SQL。
+const cloudbase = require('@cloudbase/node-sdk');
 
-// 解析 PostgreSQL 连接配置：
-//   1) DATABASE_URL（完整连接串，pg 原生支持，云托管关联数据库 / Supabase 常填此项）
-//   2) DB_CONNECTION_STRING（同上别名）
-//   3) 拆字段 PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE
-function buildConfig() {
-  const ssl = process.env.DATABASE_SSL === '1' ? { rejectUnauthorized: false } : undefined;
-  if (process.env.DATABASE_URL) {
-    return { connectionString: process.env.DATABASE_URL, ssl };
-  }
-  if (process.env.DB_CONNECTION_STRING) {
-    return { connectionString: process.env.DB_CONNECTION_STRING, ssl };
-  }
-  const host = process.env.PGHOST || process.env.DB_HOST;
-  const port = parseInt(process.env.PGPORT || process.env.DB_PORT, 10) || 5432;
-  const user = process.env.PGUSER || process.env.DB_USER;
-  const password = process.env.PGPASSWORD || process.env.DB_PASSWORD;
-  const database = process.env.PGDATABASE || process.env.DB_NAME;
-  if (host && user) {
-    return { host, port, user, password, database, ssl };
-  }
-  return null;
+const env = process.env.CLOUD_ENV || process.env.TCB_ENV;
+if (!env) {
+  console.error('[db] 未设置 CLOUD_ENV（CloudBase 环境 ID）；云开发数据库无法初始化。');
 }
 
-const cfg = buildConfig();
-if (!cfg) {
-  console.error(
-    '[db] 未检测到数据库连接配置：请在环境变量设置 DATABASE_URL（云托管关联数据库 / Supabase 连接串），否则无法访问 PostgreSQL。'
-  );
+function initOpts() {
+  const opts = { env };
+  const secretId =
+    process.env.TCB_SECRETID || process.env.TENCENTCLOUD_SECRETID || process.env.SECRET_ID;
+  const secretKey =
+    process.env.TCB_SECRETKEY || process.env.TENCENTCLOUD_SECRETKEY || process.env.SECRET_KEY;
+  if (secretId && secretKey) {
+    opts.secretId = secretId;
+    opts.secretKey = secretKey;
+  }
+  return opts;
 }
 
-// serverless（Vercel）下连接数要小，避免打满 Supabase 连接池；
-// 同时设置连接/空闲超时，避免函数实例被吊死。
-const poolConfig = Object.assign({}, cfg || { host: 'localhost', port: 5432 });
-poolConfig.max = parseInt(process.env.PG_POOL_MAX, 10) || (process.env.VERCEL === '1' ? 5 : 10);
-poolConfig.idleTimeoutMillis = 30000;
-poolConfig.connectionTimeoutMillis = 8000;
+const tcb = cloudbase.init(initOpts());
+const db = tcb.database();
+const _ = db.command;
 
-const pool = new Pool(poolConfig);
-pool.on('error', (e) => console.error('[db] pool error', e.message));
+// 便捷：集合对象
+const C = {
+  jobs: db.collection('jobs'),
+  verdicts: db.collection('verdicts'),
+  abuse: db.collection('abuse'),
+  users: db.collection('users'),
+  sources: db.collection('sources'),
+  feedback: db.collection('feedback'),
+  tips: db.collection('tips'),
+};
 
-module.exports = { pool };
+module.exports = { db, _, C, tcb };

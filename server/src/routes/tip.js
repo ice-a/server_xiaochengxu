@@ -2,35 +2,12 @@
 
 const express = require('express');
 const router = express.Router();
-const { pool } = require('../db');
-
-// 惰性建表：首次打赏前确保 tips 表存在（用户没手动跑 schema.sql 也能直接用）。
-// 仅执行一次（缓存 Promise），幂等（IF NOT EXISTS）。
-let ensureTablePromise = null;
-function ensureTipsTable() {
-  if (!ensureTablePromise) {
-    ensureTablePromise = pool
-      .query(
-        `CREATE TABLE IF NOT EXISTS public.tips (
-          id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-          uid          TEXT    NOT NULL DEFAULT '',
-          amount_cents INTEGER NOT NULL DEFAULT 0,
-          message      TEXT,
-          channel      TEXT    NOT NULL DEFAULT 'demo',
-          created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-        )`
-      )
-      .catch((e) => {
-        ensureTablePromise = null; // 允许下次重试
-        throw e;
-      });
-  }
-  return ensureTablePromise;
-}
+const { C } = require('../db');
 
 // POST /api/tip  { uid, amount, message? }
-// 演示模式（默认）：直接把打赏记录写入 tips 表，不产生真实扣款。
+// 演示模式（默认）：直接把打赏记录写入 tips 集合，不产生真实扣款。
 // 适合 MVP 快速验证交互；后续接微信虚拟支付后改用 /api/tip/sign。
+// 说明：云开发数据库集合即用即建，无需建表。
 router.post('/', async (req, res) => {
   const uid = (req.body.uid || 'anonymous').toString();
   const amount = Number(req.body.amount);
@@ -41,12 +18,13 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    await ensureTipsTable();
-    await pool.query(
-      `INSERT INTO tips (uid, amount_cents, message, channel)
-       VALUES ($1, $2, $3, 'demo')`,
-      [uid, Math.round(amount * 100), message]
-    );
+    await C.tips.add({
+      uid,
+      amount_cents: Math.round(amount * 100),
+      message,
+      channel: 'demo',
+      created_at: Date.now(),
+    });
     return res.json({ ok: true });
   } catch (e) {
     console.error('[tip] insert failed:', e.message);

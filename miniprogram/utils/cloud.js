@@ -5,7 +5,7 @@
 //   USE_CLOUD_CONTAINER=true  → wx.cloud.callContainer（免域名白名单，需 wx.cloud.init）
 //   USE_CLOUD_CONTAINER=false → wx.request 直连 API_BASE（需把域名加入小程序 request 合法域名）
 // 自动注入匿名 uid（后端用它代替 OPENID 做限流 / 历史隔离）。
-const { CLOUD_ENV, USE_CLOUD_CONTAINER, API_BASE } = require('../config');
+const { CLOUD_ENV, CLOUD_SERVICE, USE_CLOUD_CONTAINER, API_BASE } = require('../config');
 
 function callFunction(name, data = {}) {
   const uid = wx.getStorageSync('uid') || '';
@@ -26,8 +26,10 @@ function callFunction(name, data = {}) {
     };
 
     if (USE_CLOUD_CONTAINER && wx.cloud && wx.cloud.callContainer) {
+      const containerConfig = { env: CLOUD_ENV };
+      if (CLOUD_SERVICE) containerConfig.service = CLOUD_SERVICE; // 多服务环境需指定后端服务名
       wx.cloud.callContainer({
-        config: { env: CLOUD_ENV }, // 若云托管有多个服务，改为 { env: CLOUD_ENV, service: '服务名' }
+        config: containerConfig,
         path: `/api/${name}`,
         method: 'POST',
         header: { 'Content-Type': 'application/json' },

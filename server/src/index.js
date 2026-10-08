@@ -2,7 +2,6 @@
 
 const express = require('express');
 const cors = require('cors');
-const { pool } = require('./db');
 const { startWorker } = require('./worker');
 const { WORKER_INTERVAL } = require('./config');
 const analyze = require('./routes/analyze');

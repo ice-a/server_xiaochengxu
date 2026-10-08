@@ -1,7 +1,7 @@
 {
   "miniprogramRoot": "miniprogram/",
   "compileType": "miniprogram",
-  "appid": "wx24683b9dec60e021",
+  "appid": "wxb171dd3c5f5449ef",
   "projectname": "is_or_no",
   "setting": {
     "urlCheck": true,
@@ -34,5 +34,6 @@
     "ignore": [],
     "include": []
   },
-  "editorSetting": {}
+  "editorSetting": {},
+  "isGameTourist": false
 }

@@ -4,7 +4,7 @@
 // 兼容两种运行环境：
 //   - 常驻容器（云托管 / CloudBase Run）：用 startWorker 的定时器扫描 pending；
 //   - 无服务器（Vercel）：无常驻进程，由 getVerdict 调 processJobById 惰性处理。
-const { pool } = require('./db');
+const { C, _ } = require('./db');
 const { callAI } = require('./ai');
 const { ruleEngine, matchOfficial } = require('./rules');
 const { ANALYZE_SYS } = require('./prompt');
@@ -14,60 +14,72 @@ const { AI } = require('./config');
 // 既能恢复卡死的 job，又避免并发轮询重复认领同一条（见 processJobById）。
 const STALE_MS = 60000;
 
-// 原子认领一个待处理任务（多实例部署时用 FOR UPDATE SKIP LOCKED 避免重复处理）。
+// 认领一个待处理任务（多实例部署时靠条件更新抢占，避免重复处理）。
 // 认领条件：pending，或 running 但已超时（updated_at 早于 now-STALE_MS）。
+// 文档库无 SELECT FOR UPDATE，故先取候选，再用「只在该状态时才置 running」的条件更新抢占；
+// 抢占成功（updated=1）才处理，否则视为被其他实例认领，返回 null。
 async function claimNextJob() {
   const now = Date.now();
-  const { rows } = await pool.query(
-    `UPDATE jobs SET status='running', stage=1, updated_at=$2
-     WHERE id = (
-       SELECT id FROM jobs
-       WHERE status='pending' OR (status='running' AND updated_at < $3)
-       ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED
-     )
-     RETURNING id, fingerprint, raw_text, uid`,
-    [now, now - STALE_MS]
-  );
-  return rows[0];
+  const staleTs = now - STALE_MS;
+  const { data } = await C.jobs
+    .where(
+      _.or([
+        { status: 'pending' },
+        { status: 'running', updated_at: _.lt(staleTs) },
+      ])
+    )
+    .orderBy('created_at', 'asc')
+    .limit(1)
+    .get();
+  if (!data.length) return null;
+  const job = data[0];
+  const upd1 = await C.jobs
+    .where({ _id: job._id, status: 'pending' })
+    .update({ status: 'running', stage: 1, updated_at: now });
+  if (upd1.stats.updated !== 1) {
+    const upd2 = await C.jobs
+      .where({ _id: job._id, status: 'running', updated_at: _.lt(staleTs) })
+      .update({ status: 'running', stage: 1, updated_at: now });
+    if (upd2.stats.updated !== 1) return null;
+  }
+  return job;
 }
 
-// 写 verdicts（snake_case 列）
+// 写 verdicts（snake_case 字段；JSON 数组/对象直接存文档库，无需序列化）
 async function writeVerdict(jobId, fingerprint, v) {
   const ttlDays = v.verdict === 'false' ? 7 : v.verdict === 'true' ? 30 : 1;
   const expiresAt = Date.now() + ttlDays * 86400000;
-  const { rows } = await pool.query(
-    `INSERT INTO verdicts
-      (fingerprint, channel, claim, verdict, intent, one_line, reasons, actions, sources, risk_predicates, confidence_internal, model, hit_count, expires_at, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'mid',$11,0,$12,$13)
-     RETURNING id`,
-    [
-      fingerprint,
-      v.channel,
-      v.claim,
-      v.verdict,
-      v.intent,
-      v.oneLine,
-      JSON.stringify(v.reasons || []),
-      JSON.stringify(v.actions || []),
-      JSON.stringify(v.sources || []),
-      JSON.stringify(v.riskPredicates || []),
-      v.model,
-      expiresAt,
-      Date.now(),
-    ]
-  );
-  const verdictId = String(rows[0].id);
-  await pool.query(
-    `UPDATE jobs SET status=$1, verdict_id=$2, stage=4, updated_at=$3 WHERE id=$4`,
-    [v.degraded ? 'degraded' : 'done', verdictId, Date.now(), Number(jobId)]
-  );
+  const { _id } = await C.verdicts.add({
+    fingerprint,
+    channel: v.channel,
+    claim: v.claim,
+    verdict: v.verdict,
+    intent: v.intent,
+    one_line: v.oneLine,
+    reasons: v.reasons || [],
+    actions: v.actions || [],
+    sources: v.sources || [],
+    risk_predicates: v.riskPredicates || [],
+    confidence_internal: 'mid',
+    model: v.model,
+    hit_count: 0,
+    expires_at: expiresAt,
+    created_at: Date.now(),
+  });
+  const verdictId = String(_id);
+  await C.jobs.doc(jobId).update({
+    status: v.degraded ? 'degraded' : 'done',
+    verdict_id: verdictId,
+    stage: 4,
+    updated_at: Date.now(),
+  });
   return { ok: true, verdictId, degraded: v.degraded };
 }
 
 // 降级写库（status=degraded，标"规则判定，未经AI复核"）
 async function degrade(job) {
   const r = ruleEngine(job.raw_text || '');
-  return writeVerdict(job.id, job.fingerprint, {
+  return writeVerdict(job._id, job.fingerprint, {
     ...r,
     claim: (job.raw_text || '').slice(0, 20),
     channel: 'text',
@@ -96,7 +108,7 @@ async function processJob(job) {
     ai.oneLine = '现在查不清，先别照着做';
   }
 
-  return writeVerdict(job.id, job.fingerprint, {
+  return writeVerdict(job._id, job.fingerprint, {
     claim: ai.claim || text.slice(0, 20),
     verdict: ai.verdict,
     channel: ai.channel || 'text',
@@ -116,21 +128,27 @@ async function processJob(job) {
 // 返回 { ok, verdictId, degraded } 或被其他实例认领/非待处理时返回 null（前端继续轮询）。
 async function processJobById(id) {
   const now = Date.now();
-  const { rows } = await pool.query(
-    `UPDATE jobs SET status='running', stage=1, updated_at=$2
-     WHERE id=$1 AND (status='pending' OR (status='running' AND updated_at < $3))
-     RETURNING id, fingerprint, raw_text, uid`,
-    [Number(id), now, now - STALE_MS]
-  );
-  const job = rows[0];
+  const staleTs = now - STALE_MS;
+  let job;
+  try {
+    const { data } = await C.jobs.doc(id).get();
+    const j = data[0];
+    if (!j) return null;
+    const upd = await C.jobs
+      .where({ _id: id, status: _.or([{ status: 'pending' }, { status: 'running', updated_at: _.lt(staleTs) }]) })
+      .update({ status: 'running', stage: 1, updated_at: now });
+    if (upd.stats.updated !== 1) return null; // 被其他实例认领 / 非待处理
+    job = j;
+  } catch (e) {
+    console.error('[worker] processJobById claim err', e && e.message);
+    return null;
+  }
   if (!job) return null;
   try {
     return await processJob(job);
   } catch (e) {
     console.error('[worker] processJobById err', e && e.message);
-    await pool
-      .query(`UPDATE jobs SET status='failed', updated_at=$1 WHERE id=$2`, [Date.now(), job.id])
-      .catch(() => {});
+    await C.jobs.doc(job._id).update({ status: 'failed', updated_at: Date.now() }).catch(() => {});
     return null;
   }
 }
@@ -149,9 +167,7 @@ async function scanOnce() {
     await processJob(job);
   } catch (e) {
     console.error('[worker] process err', e.message);
-    await pool
-      .query(`UPDATE jobs SET status='failed', updated_at=$1 WHERE id=$2`, [Date.now(), job.id])
-      .catch(() => {});
+    await C.jobs.doc(job._id).update({ status: 'failed', updated_at: Date.now() }).catch(() => {});
   }
   return 1;
 }

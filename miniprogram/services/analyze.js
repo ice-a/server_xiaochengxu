@@ -57,7 +57,7 @@ function normalizeCloud(res) {
 // 返回：
 //   云缓存命中  -> { cached:true, verdictId, verdict? }
 //   云未命中    -> { cached:false, jobId }
-//   本地模式    -> { local:true, cached:false, verdictId, verdict, degraded:true }
+//   云不可用    -> { local:true, cached:false, verdictId, verdict, degraded:true }（降级本地规则引擎）
 async function submit(text) {
   const clean = (text || '').trim();
   if (clean.length < 5) {

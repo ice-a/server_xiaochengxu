@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
-const { pool } = require('../db');
+const { C, _ } = require('../db');
 const { FREE_QUOTA } = require('../config');
 const { publicVerdict } = require('../format');
 
@@ -15,22 +15,20 @@ function fingerprint(text) {
   return crypto.createHash('sha256').update(norm, 'utf8').digest('hex').slice(0, 16);
 }
 
-// 简易每日限流：abuse 表按 uid+日期计数（upsert 自增）
+// 简易每日限流：abuse 集合按 uid+日期计数（命中自增，未命中新建）
 async function checkQuota(uid) {
   const day = new Date().toISOString().slice(0, 10);
   const id = `${uid}_${day}`;
-  const { rows } = await pool.query('SELECT count FROM abuse WHERE id=$1', [id]);
-  const count = rows[0] ? rows[0].count : 0;
+  const { data } = await C.abuse.where({ id }).get();
+  const count = data[0] ? data[0].count : 0;
   if (count >= FREE_QUOTA) {
     return { ok: false, code: 4001, msg: '今天次数用完啦，明天再来' };
   }
-  await pool
-    .query(
-      `INSERT INTO abuse (id, uid, day, count, updated_at) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (id) DO UPDATE SET count = abuse.count + 1, updated_at = EXCLUDED.updated_at`,
-      [id, uid, day, count + 1, Date.now()]
-    )
-    .catch(() => {});
+  if (data[0]) {
+    await C.abuse.doc(data[0]._id).update({ count: _.inc(1), updated_at: Date.now() }).catch(() => {});
+  } else {
+    await C.abuse.add({ id, uid, day, count: 1, updated_at: Date.now() }).catch(() => {});
+  }
   return { ok: true };
 }
 
@@ -55,22 +53,28 @@ router.post('/', async (req, res) => {
   const now = Date.now();
 
   // 查缓存（精确命中 + TTL）
-  const { rows: hits } = await pool.query('SELECT * FROM verdicts WHERE fingerprint=$1 LIMIT 1', [fp]);
+  const { data: hits } = await C.verdicts.where({ fingerprint: fp }).limit(1).get();
   if (hits.length) {
     const v = hits[0];
     if (!v.expires_at || now < v.expires_at) {
-      await pool.query('UPDATE verdicts SET hit_count = COALESCE(hit_count,0)+1 WHERE id=$1', [v.id]).catch(() => {});
-      return res.json({ ok: true, cached: true, verdictId: String(v.id), verdict: publicVerdict(v) });
+      await C.verdicts.doc(v._id).update({ hit_count: _.inc(1) }).catch(() => {});
+      return res.json({ ok: true, cached: true, verdictId: String(v._id), verdict: publicVerdict(v) });
     }
   }
 
   // 未命中：建 job（raw_text 生产环境应加密存储，此处明文仅骨架）
-  const { rows: ins } = await pool.query(
-    `INSERT INTO jobs (uid, fingerprint, input_type, raw_text, stage, status, created_at, updated_at)
-     VALUES ($1,$2,'text',$3,0,'pending',$4,$5) RETURNING id`,
-    [uid, fp, useText, now, now]
-  );
-  const jobId = String(ins[0].id);
+  const { _id } = await C.jobs.add({
+    uid,
+    fingerprint: fp,
+    input_type: 'text',
+    raw_text: useText,
+    stage: 0,
+    status: 'pending',
+    verdict_id: '',
+    created_at: now,
+    updated_at: now,
+  });
+  const jobId = String(_id);
 
   // worker 定时器会在数秒内异步处理；前端轮询 getVerdict({jobId}) 取结论
   return res.json({ ok: true, cached: false, jobId });
