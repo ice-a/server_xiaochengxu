@@ -4,8 +4,9 @@
 module.exports = {
   // CloudBase 环境 ID（云托管所在环境；wx.cloud.callContainer / wx.cloud.init 需要）。
   CLOUD_ENV: 'cloud1-d2gpgyh80aef3842b',
-  // 云托管服务名：该环境内只有一个服务时留空即可；多个服务时填后端服务名（见云托管控制台）。
-  CLOUD_SERVICE: '',
+  // 云托管服务名（云托管控制台 → 服务列表中的服务名）。
+  // 必填：callContainer 网关靠它选路，留空会报 -601031 INVALID_PATH（未找到匹配的转发规则）。
+  CLOUD_SERVICE: 'bianfeishi',
 
   // 开发演示开关：true = 不走云端，用前端本地规则引擎（utils/localEngine.js）直接判定；
   // false = 走云托管后端（/api/*）。上线提审前保持 false。
