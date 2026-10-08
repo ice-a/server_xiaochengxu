@@ -27,12 +27,16 @@ function callFunction(name, data = {}) {
 
     if (USE_CLOUD_CONTAINER && wx.cloud && wx.cloud.callContainer) {
       const containerConfig = { env: CLOUD_ENV };
-      if (CLOUD_SERVICE) containerConfig.service = CLOUD_SERVICE; // 多服务环境需指定后端服务名
+      const header = { 'Content-Type': 'application/json' };
+      if (CLOUD_SERVICE) {
+        containerConfig.service = CLOUD_SERVICE; // 多服务环境需指定后端服务名
+        header['X-WX-SERVICE'] = CLOUD_SERVICE; // 兼容旧版 SDK：用 header 指定服务
+      }
       wx.cloud.callContainer({
         config: containerConfig,
         path: `/api/${name}`,
         method: 'POST',
-        header: { 'Content-Type': 'application/json' },
+        header,
         data: body,
         success: onSuccess,
         fail: onFail,
