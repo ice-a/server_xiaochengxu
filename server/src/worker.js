@@ -14,28 +14,41 @@ const { AI } = require('./config');
 // 既能恢复卡死的 job，又避免并发轮询重复认领同一条（见 processJobById）。
 const STALE_MS = 60000;
 
-// 按条件查一个候选 job，并用「只在该状态时才置 running」的条件更新抢占
-// （多实例部署防重复处理；抢占成功 updated=1 才算认领成功）。
-// 注意：不要用 _.or 组合查询——实测服务端会抛
-// "Cannot read properties of undefined (reading 'updatedAt')"，改为拆成多次简单查询。
-async function claimWhere(cond) {
-  const now = Date.now();
-  const { data } = await C.jobs.where(cond).orderBy('created_at', 'asc').limit(1).get();
-  if (!data.length) return null;
-  const job = data[0];
-  const upd = await C.jobs
-    .where({ _id: job._id, status: cond.status })
-    .update({ status: 'running', stage: 1, updated_at: now });
-  const updated = upd && upd.stats && upd.stats.updated;
-  if (updated !== 1) return null;
-  return job;
+// 还原错误对象：优先 stack，没有则 JSON 化（SDK 有时抛普通对象而非 Error）
+function errObj(e) {
+  return (e && e.stack) || (typeof e === 'object' ? JSON.stringify(e) : e);
 }
 
-// 认领一个待处理任务：先抢 pending，再抢超时残留的 running（updated_at 早于 now-STALE_MS）。
+// 按状态认领一个候选 job：先简单查询，再用 .doc(_id).update 抢占。
+// 重要：CloudBase 文档库对已认领用 .doc(_id).update()（标准 API）；
+// 不要用 .where({_id}).update() 或 _.or / _.lt 组合条件——实测服务端会抛
+// "Cannot read properties of undefined (reading 'updatedAt')"。
+async function claimWhere(status) {
+  const now = Date.now();
+  let data;
+  try {
+    const res = await C.jobs.where({ status }).limit(1).get();
+    data = res.data;
+  } catch (e) {
+    console.error('[claim] GET err', errObj(e));
+    return null;
+  }
+  if (!data || !data.length) return null;
+  const job = data[0];
+  try {
+    const upd = await C.jobs.doc(job._id).update({ status: 'running', stage: 1, updated_at: now });
+    if (!upd || !upd.stats || upd.stats.updated !== 1) return null;
+    return job;
+  } catch (e) {
+    console.error('[claim] UPDATE err', errObj(e));
+    return null;
+  }
+}
+
+// 认领一个待处理任务：先抢 pending，再抢 running（单实例下 running 残留极少）。
 async function claimNextJob() {
-  const staleTs = Date.now() - STALE_MS;
-  let job = await claimWhere({ status: 'pending' });
-  if (!job) job = await claimWhere({ status: 'running', updated_at: _.lt(staleTs) });
+  let job = await claimWhere('pending');
+  if (!job) job = await claimWhere('running');
   return job;
 }
 
@@ -118,38 +131,26 @@ async function processJob(job) {
 }
 
 // 原子认领并处理指定 job（serverless 下由 getVerdict 调用）。
-// 认领条件同 claimNextJob：pending，或超时残留的 running。
-// 返回 { ok, verdictId, degraded } 或被其他实例认领/非待处理时返回 null（前端继续轮询）。
+// 用 .doc(id).update() 抢占（单实例下无需按状态条件校验）。
 async function processJobById(id) {
   const now = Date.now();
-  const staleTs = now - STALE_MS;
   let job;
   try {
     const { data } = await C.jobs.doc(id).get();
     const j = data[0];
     if (!j) return null;
-    // 不用 _.or 组合条件（服务端不兼容），改为先试 pending、再试超时残留 running
-    let upd = await C.jobs
-      .where({ _id: id, status: 'pending' })
-      .update({ status: 'running', stage: 1, updated_at: now });
-    let claimed = upd && upd.stats && upd.stats.updated === 1;
-    if (!claimed) {
-      upd = await C.jobs
-        .where({ _id: id, status: 'running', updated_at: _.lt(staleTs) })
-        .update({ status: 'running', stage: 1, updated_at: now });
-      claimed = upd && upd.stats && upd.stats.updated === 1;
-    }
-    if (!claimed) return null; // 被其他实例认领 / 非待处理
+    const upd = await C.jobs.doc(id).update({ status: 'running', stage: 1, updated_at: now });
+    if (!upd || !upd.stats || upd.stats.updated !== 1) return null; // 认领失败
     job = j;
   } catch (e) {
-    console.error('[worker] processJobById claim err', (e && e.stack) || e);
+    console.error('[worker] processJobById claim err', errObj(e));
     return null;
   }
   if (!job) return null;
   try {
     return await processJob(job);
   } catch (e) {
-    console.error('[worker] processJobById err', e && e.message);
+    console.error('[worker] processJobById err', errObj(e));
     await C.jobs.doc(job._id).update({ status: 'failed', updated_at: Date.now() }).catch(() => {});
     return null;
   }

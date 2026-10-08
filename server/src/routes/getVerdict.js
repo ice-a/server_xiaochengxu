@@ -17,6 +17,7 @@ async function getVerdictById(id) {
 // POST /api/getVerdict  { jobId } 或 { verdictId }
 // jobId 模式：serverless 下会在此惰性处理 pending 任务，再返回结论。
 router.post('/', async (req, res) => {
+ try {
   // 轮询模式：按 jobId 返回任务进度 / 结论
   if (req.body.jobId) {
     const { data: rows } = await C.jobs.doc(req.body.jobId).get();
@@ -49,6 +50,10 @@ router.post('/', async (req, res) => {
   const found = await getVerdictById(verdictId);
   if (!found) return res.json({ ok: false, code: 404, msg: '记录不存在或已过期' });
   return res.json({ ok: true, verdictId: found.verdictId, verdict: found.verdict });
+ } catch (e) {
+   console.error('[getVerdict] err', e && e.stack ? e.stack : e);
+   return res.status(500).json({ ok: false, code: 500, msg: '查询失败' });
+ }
 });
 
 module.exports = router;

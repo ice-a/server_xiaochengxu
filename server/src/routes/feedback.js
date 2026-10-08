@@ -7,19 +7,24 @@ const { C } = require('../db');
 // POST /api/feedback  { uid, verdictId, type, comment }
 // 纠错反馈入口，进人工复核队列
 router.post('/', async (req, res) => {
-  const uid = (req.body.uid || 'anonymous').toString();
-  const { verdictId, type, comment } = req.body;
-  if (!verdictId || !type) {
-    return res.json({ ok: false, code: 4005, msg: '参数不全' });
+  try {
+    const uid = (req.body.uid || 'anonymous').toString();
+    const { verdictId, type, comment } = req.body;
+    if (!verdictId || !type) {
+      return res.json({ ok: false, code: 4005, msg: '参数不全' });
+    }
+    await C.feedback.add({
+      uid,
+      verdict_id: String(verdictId),
+      type,
+      comment: comment || '',
+      created_at: Date.now(),
+    });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[feedback] err', e && e.stack ? e.stack : e);
+    return res.status(500).json({ ok: false, code: 500, msg: '提交失败' });
   }
-  await C.feedback.add({
-    uid,
-    verdict_id: String(verdictId),
-    type,
-    comment: comment || '',
-    created_at: Date.now(),
-  });
-  return res.json({ ok: true });
 });
 
 module.exports = router;
