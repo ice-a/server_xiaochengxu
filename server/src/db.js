@@ -13,6 +13,14 @@ if (!env) {
 
 function initOpts() {
   const opts = { env };
+  // 鉴权优先级：API Key（accessKey，官方称最高优先级）> 固定密钥对。
+  // 旧版 SDK 在云托管容器内走 169.254.x.x 内网通道会 connect ETIMEDOUT；
+  // 配置 CLOUDBASE_APIKEY（云开发控制台 → API Key 管理创建的服务端 Key）
+  // 后走标准 API 网关鉴权，绕开该内网通道。
+  const accessKey = process.env.CLOUDBASE_APIKEY;
+  if (accessKey) {
+    opts.accessKey = accessKey;
+  }
   const secretId =
     process.env.TCB_SECRETID || process.env.TENCENTCLOUD_SECRETID || process.env.SECRET_ID;
   const secretKey =
@@ -20,6 +28,11 @@ function initOpts() {
   if (secretId && secretKey) {
     opts.secretId = secretId;
     opts.secretKey = secretKey;
+  }
+  if (!accessKey && !(secretId && secretKey)) {
+    console.error(
+      '[db] 建议配置 CLOUDBASE_APIKEY（服务端 API Key），否则数据库调用可能超时（ETIMEDOUT 169.254.x.x）或鉴权失败。'
+    );
   }
   return opts;
 }

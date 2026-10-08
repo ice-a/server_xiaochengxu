@@ -1,7 +1,7 @@
 {
   "name": "bianfeishi-server",
   "version": "1.0.0",
-  "description": "辨是非小程序后端（云托管 Express 服务，PostgreSQL）",
+  "description": "辨是非小程序后端（云托管 Express 服务，CloudBase 文档数据库）",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -11,7 +11,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@cloudbase/node-sdk": "^2.0.0",
+    "@cloudbase/node-sdk": "^3.18.0",
     "cors": "^2.8.5",
     "express": "^4.19.2"
   }
