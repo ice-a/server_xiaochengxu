@@ -70,7 +70,7 @@ async function submit(text) {
       return normalizeCloud(res);
     } catch (e) {
       // 云调用失败，降级到本地规则引擎（架构方案 L2）
-      console.warn('[analyze] 云函数调用失败，降级本地规则引擎：', e && e.msg);
+      console.warn('[analyze] 云函数调用失败，降级本地规则引擎：', e && e.msg, e && e.detail);
     }
   }
 

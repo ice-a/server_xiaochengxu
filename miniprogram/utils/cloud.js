@@ -20,6 +20,8 @@ function callFunction(name, data = {}) {
       }
     };
     const onFail = (err) => {
+      // 把 callContainer 原始错误打出来，便于定位（传输层失败多为服务未运行/环境不对）
+      console.error('[cloud] callContainer failed:', name, err);
       reject({ ok: false, code: -1, msg: '网络开了小差，请稍后再试', detail: err });
     };
 
